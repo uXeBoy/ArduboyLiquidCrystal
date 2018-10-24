@@ -1,9 +1,20 @@
-= Liquid Crystal Library for Arduino =
+= Liquid Crystal Library for Arduboy =
 
-This library allows an Arduino board to control LiquidCrystal displays (LCDs) based on the Hitachi HD44780 (or a compatible) chipset, which is found on most text-based LCDs.
+Have put together a modified version of the Arduino **LiquidCrystal** library, which allows the Arduboy to be used as a full-featured 16x2 character display!
 
-For more information about this library please visit us at
-http://www.arduino.cc/en/Reference/LiquidCrystal
+The two rows of 16 characters are rendered directly to the screen, and fill up the top half (128x32). You can watch the demo using ProjectABE:
+
+https://felipemanga.github.io/ProjectABE/?url=https://raw.githubusercontent.com/uXeBoy/ArduboyLiquidCrystal/master/ArduboyLiquidCrystal.ino.hex
+
+Used a nice big 8x16 font from here:
+
+http://www.rinkydinkelectronics.com/r_fonts.php
+
+And adapted a couple of the functions from here:
+
+https://github.com/dylangageot/LCDSim
+
+Was able to run all of the **LiquidCrystal** example sketches with just a few edits - have not implemented custom characters yet, happy to leave it at this for now!
 
 == License ==
 
