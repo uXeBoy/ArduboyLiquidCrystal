@@ -4,164 +4,77 @@
 #include <string.h>
 #include <inttypes.h>
 #include "Arduino.h"
-
-// When the display powers up, it is configured as follows:
-//
-// 1. Display clear
-// 2. Function set: 
-//    DL = 1; 8-bit interface data 
-//    N = 0; 1-line display 
-//    F = 0; 5x8 dot character font 
-// 3. Display on/off control: 
-//    D = 0; Display off 
-//    C = 0; Cursor off 
-//    B = 0; Blinking off 
-// 4. Entry mode set: 
-//    I/D = 1; Increment by 1 
-//    S = 0; No shift 
-//
-// Note, however, that resetting the Arduino doesn't reset the LCD, so we
-// can't assume that its in that state when a sketch starts (and the
-// LiquidCrystal constructor is called).
+#include "Retro8x16.h"
 
 LiquidCrystal::LiquidCrystal(uint8_t rs, uint8_t rw, uint8_t enable,
-			     uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3,
-			     uint8_t d4, uint8_t d5, uint8_t d6, uint8_t d7)
+           uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3,
+           uint8_t d4, uint8_t d5, uint8_t d6, uint8_t d7)
 {
-  init(0, rs, rw, enable, d0, d1, d2, d3, d4, d5, d6, d7);
+  begin(16, 2);
 }
 
 LiquidCrystal::LiquidCrystal(uint8_t rs, uint8_t enable,
-			     uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3,
-			     uint8_t d4, uint8_t d5, uint8_t d6, uint8_t d7)
+           uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3,
+           uint8_t d4, uint8_t d5, uint8_t d6, uint8_t d7)
 {
-  init(0, rs, 255, enable, d0, d1, d2, d3, d4, d5, d6, d7);
+  begin(16, 2);
 }
 
 LiquidCrystal::LiquidCrystal(uint8_t rs, uint8_t rw, uint8_t enable,
-			     uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3)
+           uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3)
 {
-  init(1, rs, rw, enable, d0, d1, d2, d3, 0, 0, 0, 0);
+  begin(16, 2);
 }
 
 LiquidCrystal::LiquidCrystal(uint8_t rs,  uint8_t enable,
-			     uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3)
+           uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3)
 {
-  init(1, rs, 255, enable, d0, d1, d2, d3, 0, 0, 0, 0);
+  begin(16, 2);
 }
 
 void LiquidCrystal::init(uint8_t fourbitmode, uint8_t rs, uint8_t rw, uint8_t enable,
-			 uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3,
-			 uint8_t d4, uint8_t d5, uint8_t d6, uint8_t d7)
+       uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3,
+       uint8_t d4, uint8_t d5, uint8_t d6, uint8_t d7)
 {
-  _rs_pin = rs;
-  _rw_pin = rw;
-  _enable_pin = enable;
-  
-  _data_pins[0] = d0;
-  _data_pins[1] = d1;
-  _data_pins[2] = d2;
-  _data_pins[3] = d3; 
-  _data_pins[4] = d4;
-  _data_pins[5] = d5;
-  _data_pins[6] = d6;
-  _data_pins[7] = d7; 
+  begin(16, 2);
+}
 
-  if (fourbitmode)
-    _displayfunction = LCD_4BITMODE | LCD_1LINE | LCD_5x8DOTS;
-  else 
-    _displayfunction = LCD_8BITMODE | LCD_1LINE | LCD_5x8DOTS;
-  
-  begin(16, 1);  
+volatile uint8_t cursorBlink = 0;
+
+ISR(TIMER3_COMPA_vect)
+{
+  cursorBlink ^= B00000001;
 }
 
 void LiquidCrystal::begin(uint8_t cols, uint8_t lines, uint8_t dotsize) {
-  if (lines > 1) {
-    _displayfunction |= LCD_2LINE;
-  }
+  // Set up Timer 3 for cursorBlink interrupt
+  TCCR3A = 0; // Normal operation
+  TCCR3B = _BV(WGM32) | _BV(CS30) | _BV(CS32); // CTC, scale to clock ÷ 1024
+  OCR3A = 8192; // Compare A register value
+  TIMSK3 = _BV(OCIE3A); // Interrupt on compare A match
+
+  RAM_current = DDR;
+  DDRAM_counter = 0;
+  DDRAM_display = 0;
+  // CGRAM_counter = 0;
+  LCD_CursorPos = 255;
+
+  // Init DDRAM
+  for (uint8_t i = 0; i < 104; i++)
+    DDRAM[i] = 0x00;
+
+  DDRAM[40] = 95; // 127 (Cursor) - 32
+
   _numlines = lines;
-
-  setRowOffsets(0x00, 0x40, 0x00 + cols, 0x40 + cols);  
-
-  // for some 1 line displays you can select a 10 pixel high font
-  if ((dotsize != LCD_5x8DOTS) && (lines == 1)) {
-    _displayfunction |= LCD_5x10DOTS;
-  }
-
-  pinMode(_rs_pin, OUTPUT);
-  // we can save 1 pin by not using RW. Indicate by passing 255 instead of pin#
-  if (_rw_pin != 255) { 
-    pinMode(_rw_pin, OUTPUT);
-  }
-  pinMode(_enable_pin, OUTPUT);
-  
-  // Do these once, instead of every time a character is drawn for speed reasons.
-  for (int i=0; i<((_displayfunction & LCD_8BITMODE) ? 8 : 4); ++i)
-  {
-    pinMode(_data_pins[i], OUTPUT);
-   } 
-
-  // SEE PAGE 45/46 FOR INITIALIZATION SPECIFICATION!
-  // according to datasheet, we need at least 40ms after power rises above 2.7V
-  // before sending commands. Arduino can turn on way before 4.5V so we'll wait 50
-  delayMicroseconds(50000); 
-  // Now we pull both RS and R/W low to begin commands
-  digitalWrite(_rs_pin, LOW);
-  digitalWrite(_enable_pin, LOW);
-  if (_rw_pin != 255) { 
-    digitalWrite(_rw_pin, LOW);
-  }
-  
-  //put the LCD into 4 bit or 8 bit mode
-  if (! (_displayfunction & LCD_8BITMODE)) {
-    // this is according to the hitachi HD44780 datasheet
-    // figure 24, pg 46
-
-    // we start in 8bit mode, try to set 4 bit mode
-    write4bits(0x03);
-    delayMicroseconds(4500); // wait min 4.1ms
-
-    // second try
-    write4bits(0x03);
-    delayMicroseconds(4500); // wait min 4.1ms
-    
-    // third go!
-    write4bits(0x03); 
-    delayMicroseconds(150);
-
-    // finally, set to 4-bit interface
-    write4bits(0x02); 
-  } else {
-    // this is according to the hitachi HD44780 datasheet
-    // page 45 figure 23
-
-    // Send function set command sequence
-    command(LCD_FUNCTIONSET | _displayfunction);
-    delayMicroseconds(4500);  // wait more than 4.1ms
-
-    // second try
-    command(LCD_FUNCTIONSET | _displayfunction);
-    delayMicroseconds(150);
-
-    // third go
-    command(LCD_FUNCTIONSET | _displayfunction);
-  }
-
-  // finally, set # lines, font size, etc.
-  command(LCD_FUNCTIONSET | _displayfunction);  
+  setRowOffsets(0x00, 0x40, 0x00 + cols, 0x40 + cols);
 
   // turn the display on with no cursor or blinking default
-  _displaycontrol = LCD_DISPLAYON | LCD_CURSOROFF | LCD_BLINKOFF;  
+  _displaycontrol = LCD_DISPLAYON | LCD_CURSOROFF | LCD_BLINKOFF;
   display();
-
-  // clear it off
-  clear();
 
   // Initialize to default text direction (for romance languages)
   _displaymode = LCD_ENTRYLEFT | LCD_ENTRYSHIFTDECREMENT;
-  // set the entry mode
-  command(LCD_ENTRYMODESET | _displaymode);
-
+  command(LCD_ENTRYMODESET | _displaymode); // set the entry mode
 }
 
 void LiquidCrystal::setRowOffsets(int row0, int row1, int row2, int row3)
@@ -176,13 +89,11 @@ void LiquidCrystal::setRowOffsets(int row0, int row1, int row2, int row3)
 void LiquidCrystal::clear()
 {
   command(LCD_CLEARDISPLAY);  // clear display, set cursor position to zero
-  delayMicroseconds(2000);  // this command takes a long time!
 }
 
 void LiquidCrystal::home()
 {
   command(LCD_RETURNHOME);  // set cursor position to zero
-  delayMicroseconds(2000);  // this command takes a long time!
 }
 
 void LiquidCrystal::setCursor(uint8_t col, uint8_t row)
@@ -194,7 +105,7 @@ void LiquidCrystal::setCursor(uint8_t col, uint8_t row)
   if ( row >= _numlines ) {
     row = _numlines - 1;    // we count rows starting w/0
   }
-  
+
   command(LCD_SETDDRAMADDR | (col + _row_offsets[row]));
 }
 
@@ -263,64 +174,294 @@ void LiquidCrystal::noAutoscroll(void) {
 // Allows us to fill the first 8 CGRAM locations
 // with custom characters
 void LiquidCrystal::createChar(uint8_t location, uint8_t charmap[]) {
+  /*
   location &= 0x7; // we only have 8 locations 0-7
   command(LCD_SETCGRAMADDR | (location << 3));
   for (int i=0; i<8; i++) {
     write(charmap[i]);
   }
+  */
 }
 
 /*********** mid level commands, for sending data/cmds */
 
-inline void LiquidCrystal::command(uint8_t value) {
-  send(value, LOW);
+// adapted from https://github.com/dylangageot/LCDSim
+inline void LiquidCrystal::command(uint8_t instruction) {
+  uint8_t i;
+  for (i = 0; i < 8; i++)
+      if (instruction & (0x80 >> i))
+          break;
+  switch (i) {
+      // SET DDRAM ADDRESS
+      case 0:
+          DDRAM_counter = instruction & 0x7F;
+          RAM_current = DDR;
+          break;
+      // SET CGRAM ADDRESS
+      case 1:
+          // CGRAM_counter = instruction & 0x3F;
+          RAM_current = CGR;
+          break;
+      // CURSOR/DISPLAY SHIFT
+      case 3:
+          if (instruction & 0x08) {
+              if (instruction & 0x04) {
+                  if (DDRAM_display == 0)
+                      DDRAM_display = 39;
+                  else
+                      DDRAM_display--;
+              } else {
+                  if (DDRAM_display == 39)
+                      DDRAM_display = 0;
+                  else
+                      DDRAM_display++;
+              }
+          } else {
+              if (instruction & 0x04) {
+                  if (DDRAM_counter < 103) {
+                      if (DDRAM_counter == 39)
+                          DDRAM_counter = 64;
+                      else
+                          DDRAM_counter++;
+                  } else {
+                      DDRAM_counter = 0;
+                  }
+              } else {
+                  if (DDRAM_counter > 0) {
+                      if (DDRAM_counter == 64)
+                          DDRAM_counter = 39;
+                      else
+                          DDRAM_counter--;
+                  } else {
+                      DDRAM_counter = 103;
+                  }
+              }
+          }
+          break;
+      // DISPLAY ON/OFF CONTROL
+      case 4:
+          LCD_CursorBlink = instruction & 0x01;
+          LCD_CursorEnable = (instruction & 0x02) >> 1;
+          LCD_DisplayEnable = (instruction & 0x04) >> 2;
+          break;
+      // ENTRY MODE SET
+      case 5:
+          LCD_EntryMode = instruction & 0x03;
+          break;
+      // HOME
+      case 6:
+          DDRAM_counter = 0;
+          DDRAM_display = 0;
+          break;
+      // CLEAR
+      case 7:
+          for (i = 0; i < 40; i++)
+              DDRAM[i] = 0x00;
+          for (i = 64; i < 104; i++)
+              DDRAM[i] = 0x00;
+          DDRAM_counter = 0;
+          DDRAM_display = 0;
+          break;
+  }
 }
 
+// adapted from https://github.com/dylangageot/LCDSim
 inline size_t LiquidCrystal::write(uint8_t value) {
-  send(value, HIGH);
-  return 1; // assume sucess
+  if (RAM_current == DDR) { /* == CGR) {
+      n = CGRAM_counter / 8;
+      m = CGRAM_counter % 8;
+      CGROM[n][m] = instruction & 0xFF;
+      if (CGRAM_counter < 64)
+          CGRAM_counter++;
+  } else { */
+      DDRAM[DDRAM_counter] = value - 32;
+      if (LCD_EntryMode & 0x02) {
+          if (DDRAM_counter < 103) {
+              if (DDRAM_counter == 39)
+                  DDRAM_counter = 64;
+              else
+                  DDRAM_counter++;
+          } else {
+              DDRAM_counter = 0;
+          }
+          if (LCD_EntryMode & 0x01) {
+              if (DDRAM_display == 39)
+                  DDRAM_display = 0;
+              else
+                  DDRAM_display++;
+          }
+      } else {
+          if (DDRAM_counter > 0) {
+              if (DDRAM_counter == 64)
+                  DDRAM_counter = 39;
+              else
+                  DDRAM_counter--;
+          } else {
+              DDRAM_counter = 103;
+          }
+          if (LCD_EntryMode & 0x01) {
+              if (DDRAM_display == 0)
+                  DDRAM_display = 39;
+              else
+                  DDRAM_display--;
+          }
+      }
+  }
+  return 1; // assume success
 }
 
-/************ low level data pushing commands **********/
+void LiquidCrystal::draw() {
+  // only writing to the first 4 'pages' of the Arduboy screen
+  PORTD &= ~B00010000;            // LCDCommandMode
+  SPDR = 0xB0;                    // set page address
+  while (!(SPSR & _BV(SPIF))) { } // wait for byte to be sent
+  SPDR = 0x10;                    // set higher column address
+  while (!(SPSR & _BV(SPIF))) { } // wait for byte to be sent
+  PORTD |= B00010000;             // LCDDataMode
 
-// write either command or data, with automatic 4/8-bit selection
-void LiquidCrystal::send(uint8_t value, uint8_t mode) {
-  digitalWrite(_rs_pin, mode);
-
-  // if there is a RW pin indicated, set it low to Write
-  if (_rw_pin != 255) { 
-    digitalWrite(_rw_pin, LOW);
-  }
-  
-  if (_displayfunction & LCD_8BITMODE) {
-    write8bits(value); 
-  } else {
-    write4bits(value>>4);
-    write4bits(value);
-  }
-}
-
-void LiquidCrystal::pulseEnable(void) {
-  digitalWrite(_enable_pin, LOW);
-  delayMicroseconds(1);    
-  digitalWrite(_enable_pin, HIGH);
-  delayMicroseconds(1);    // enable pulse must be >450ns
-  digitalWrite(_enable_pin, LOW);
-  delayMicroseconds(100);   // commands need > 37us to settle
-}
-
-void LiquidCrystal::write4bits(uint8_t value) {
-  for (int i = 0; i < 4; i++) {
-    digitalWrite(_data_pins[i], (value >> i) & 0x01);
+  if (!LCD_DisplayEnable)
+  {
+    for (uint16_t n = 0; n < 512; n++)
+    {
+      SPDR = 0x00;
+      while (!(SPSR & _BV(SPIF))) { } // wait for byte to be sent
+    }
+    return;
   }
 
-  pulseEnable();
-}
-
-void LiquidCrystal::write8bits(uint8_t value) {
-  for (int i = 0; i < 8; i++) {
-    digitalWrite(_data_pins[i], (value >> i) & 0x01);
+  if (LCD_DisplayEnable && LCD_CursorEnable && (cursorBlink || LCD_CursorBlink == LCD_BLINKOFF))
+  {
+    if ((DDRAM_display <= DDRAM_counter) && ((DDRAM_display + 0x0F) >= DDRAM_counter))
+      LCD_CursorPos = DDRAM_counter - DDRAM_display;
+    if ((0x40 + DDRAM_display <= DDRAM_counter) && ((DDRAM_display + 0x4F) >= DDRAM_counter))
+      LCD_CursorPos = DDRAM_counter - DDRAM_display;
   }
-  
-  pulseEnable();
+
+  // adapted from C++ version of Arduboy2Core::paintScreen()
+  uint8_t d, j;
+  uint8_t q = 0;
+
+  for (uint8_t n = DDRAM_display; n < DDRAM_display + 16; n++)
+  {
+    if (n > 39) j = n - 40;
+    else j = n;
+    if (j == LCD_CursorPos) j = 40;
+
+    // set the first SPI data byte to get things started
+    SPDR = pgm_read_byte(&Retro8x16[DDRAM[j]][q++]);
+
+    // the code to iterate the loop and get the next byte from the buffer is
+    // executed while the previous byte is being sent out by the SPI controller
+    while (q < 8)
+    {
+      // get the next byte. It's put in a local variable so it can be sent as
+      // as soon as possible after the sending of the previous byte has completed
+      d = pgm_read_byte(&Retro8x16[DDRAM[j]][q++]);
+
+      while (!(SPSR & _BV(SPIF))) { } // wait for the previous byte to be sent
+
+      // put the next byte in the SPI data register. The SPI controller will
+      // clock it out while the loop continues and gets the next byte ready
+      SPDR = d;
+    }
+
+    q = 0;
+
+    while (!(SPSR & _BV(SPIF))) { } // wait for the last byte to be sent
+  }
+
+  q = 8;
+
+  for (uint8_t n = DDRAM_display; n < DDRAM_display + 16; n++)
+  {
+    if (n > 39) j = n - 40;
+    else j = n;
+    if (j == LCD_CursorPos) j = 40;
+
+    // set the first SPI data byte to get things started
+    SPDR = pgm_read_byte(&Retro8x16[DDRAM[j]][q++]);
+
+    // the code to iterate the loop and get the next byte from the buffer is
+    // executed while the previous byte is being sent out by the SPI controller
+    while (q < 16)
+    {
+      // get the next byte. It's put in a local variable so it can be sent as
+      // as soon as possible after the sending of the previous byte has completed
+      d = pgm_read_byte(&Retro8x16[DDRAM[j]][q++]);
+
+      while (!(SPSR & _BV(SPIF))) { } // wait for the previous byte to be sent
+
+      // put the next byte in the SPI data register. The SPI controller will
+      // clock it out while the loop continues and gets the next byte ready
+      SPDR = d;
+    }
+
+    q = 8;
+
+    while (!(SPSR & _BV(SPIF))) { } // wait for the last byte to be sent
+  }
+
+  q = 0;
+
+  for (uint8_t n = DDRAM_display + 64; n < DDRAM_display + 80; n++)
+  {
+    if (n > 103) j = n - 40;
+    else j = n;
+    if (j == LCD_CursorPos) j = 40;
+
+    // set the first SPI data byte to get things started
+    SPDR = pgm_read_byte(&Retro8x16[DDRAM[j]][q++]);
+
+    // the code to iterate the loop and get the next byte from the buffer is
+    // executed while the previous byte is being sent out by the SPI controller
+    while (q < 8)
+    {
+      // get the next byte. It's put in a local variable so it can be sent as
+      // as soon as possible after the sending of the previous byte has completed
+      d = pgm_read_byte(&Retro8x16[DDRAM[j]][q++]);
+
+      while (!(SPSR & _BV(SPIF))) { } // wait for the previous byte to be sent
+
+      // put the next byte in the SPI data register. The SPI controller will
+      // clock it out while the loop continues and gets the next byte ready
+      SPDR = d;
+    }
+
+    q = 0;
+
+    while (!(SPSR & _BV(SPIF))) { } // wait for the last byte to be sent
+  }
+
+  q = 8;
+
+  for (uint8_t n = DDRAM_display + 64; n < DDRAM_display + 80; n++)
+  {
+    if (n > 103) j = n - 40;
+    else j = n;
+    if (j == LCD_CursorPos) j = 40;
+
+    // set the first SPI data byte to get things started
+    SPDR = pgm_read_byte(&Retro8x16[DDRAM[j]][q++]);
+
+    // the code to iterate the loop and get the next byte from the buffer is
+    // executed while the previous byte is being sent out by the SPI controller
+    while (q < 16)
+    {
+      // get the next byte. It's put in a local variable so it can be sent as
+      // as soon as possible after the sending of the previous byte has completed
+      d = pgm_read_byte(&Retro8x16[DDRAM[j]][q++]);
+
+      while (!(SPSR & _BV(SPIF))) { } // wait for the previous byte to be sent
+
+      // put the next byte in the SPI data register. The SPI controller will
+      // clock it out while the loop continues and gets the next byte ready
+      SPDR = d;
+    }
+
+    q = 8;
+
+    while (!(SPSR & _BV(SPIF))) { } // wait for the last byte to be sent
+  }
+
+  LCD_CursorPos = 255;
 }
